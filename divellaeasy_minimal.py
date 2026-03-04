@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione con cookie da inserire
+# divellaeasy_minimal.py - Versione FINALE con download automatico dataset
 
 import os
 import time
 import requests
 import numpy as np
 import cv2
+import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 # ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
+DATASET_URL = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download"
 DIM = 64
 REQUEST_TIMEOUT = 15
 
 # ================ DATI ACCOUNT =====================
-UID = "2287667"  # <--- IL TUO USER ID (fisso, non cambia)
-
-# 🔴 INSERISCI QUI IL COOKIE SESIDS (quando scade lo cambi)
-COOKIE_SESIDS = "hvitsF06en"  # <-- Sostituisci con il nuovo valore quando scade
-
-# Costruisce il cookie completo
+UID = "2288011"
+COOKIE_SESIDS = "xa6LcV5CNv"
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -31,15 +30,53 @@ classes_fast = None
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
+# ================ DOWNLOAD DATASET (UNA SOLA VOLTA) =====================
+def download_dataset_if_missing():
+    """Scarica il dataset SOLO se non esiste già"""
+    dataset_path = Path(DATASET_PATH)
+    
+    # Se esiste già, non fare nulla
+    if dataset_path.exists() and dataset_path.is_file():
+        log(f"✅ Dataset già presente: {DATASET_PATH}")
+        return True
+    
+    # Altrimenti scaricalo
+    log("📥 Dataset non trovato. Download da Google Drive...")
+    log("⏳ Questa operazione può richiedere qualche minuto (file ~1GB)")
+    
+    # Crea la cartella dataset se non esiste
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    try:
+        urllib.request.urlretrieve(DATASET_URL, DATASET_PATH)
+        log(f"✅ Download completato! File salvato in: {DATASET_PATH}")
+        return True
+    except Exception as e:
+        log(f"❌ Errore download dataset: {e}")
+        return False
+
 # ================ DATASET =====================
 def load_dataset():
     global X_fast, y_fast, classes_fast
+    
+    # Prima controlla e scarica se necessario
+    if not download_dataset_if_missing():
+        log("❌ Impossibile caricare il dataset. Uscita.")
+        return False
+    
     data = np.load(DATASET_PATH, allow_pickle=True)
     X_fast = data["X"].astype(np.float32)
     y_fast = data["y"].astype(np.int32)
-    classes = list(np.array(data.get("classes", range(len(np.unique(y_fast)))), dtype=object))
-    classes_fast = {i: str(classes[i]) for i in range(len(classes))}
-    log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori")
+    
+    if "classes" in data.files:
+        classes = list(np.array(data["classes"], dtype=object).tolist())
+    else:
+        unique = sorted(list(set(int(x) for x in y_fast.tolist())))
+        classes = [str(c) for c in unique]
+    
+    classes_fast = {i: classes[i] for i in range(len(classes))}
+    log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes)} classi")
+    return True
 
 # ================ FEATURE EXTRACTION MINIMAL =====================
 def get_features(img):
@@ -57,14 +94,13 @@ def predict(img_crop):
 
 # ================ MAIN LOOP =====================
 def main():
-    log("🚀 Avvio DivellaEasy Minimal")
+    log("=" * 50)
+    log("🚀 Avvio DivellaEasy Minimal - Versione con download automatico")
     
-    # Verifica che il cookie sia stato inserito
-    if COOKIE_SESIDS == "WVwYztJ8Kk" and UID == "2287667":
-        log("⚠️  Hai lasciato il cookie di esempio! Inserisci il cookie vero.")
-        # Continuiamo lo stesso (tanto è quello giusto per ora)
-    
-    load_dataset()
+    # Carica dataset (lo scarica se necessario)
+    if not load_dataset():
+        log("❌ Errore fatale: impossibile caricare il dataset")
+        return
     
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -81,7 +117,6 @@ def main():
             )
             if r.status_code != 200:
                 log(f"❌ Status {r.status_code} - Cookie forse scaduto?")
-                log(f"💡 Aggiorna COOKIE_SESIDS nello script e riavvia")
                 break
             
             data = r.json()
@@ -145,4 +180,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    log("🏁 Script terminato - Cookie forse scaduto? Riavvia con cookie nuovo")
+    log("🏁 Script terminato")
