@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione FINALE con feature extraction IDENTICA al dataset
+# divellaeasy_minimal.py - Versione FINALE con feature extraction a 33 dimensioni
 
 import os
 import time
@@ -11,7 +11,7 @@ from pathlib import Path
 
 # ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
-# Link diretto per download (NON è il link di visualizzazione)
+# Link diretto per download
 DATASET_URL = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download&confirm=t"
 DIM = 64
 REQUEST_TIMEOUT = 15
@@ -80,10 +80,10 @@ def download_dataset_if_missing():
         log(f"❌ Errore download: {e}")
         return False
 
-# ================ FUNZIONI DI FEATURE EXTRACTION (IDENTICHE AL CREATORE) =====================
+# ================ FUNZIONI DI FEATURE EXTRACTION (33 DIMENSIONI) =====================
 
 def centra_figura(image):
-    """Centra e ritaglia la figura principale - IDENTICO al creatore"""
+    """Centra e ritaglia la figura principale - produce immagine 64x64"""
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -95,7 +95,7 @@ def centra_figura(image):
     return cv2.resize(crop, (DIM, DIM))
 
 def estrai_descrittori(img):
-    """Estrae descrittori completi dall'immagine - IDENTICO al creatore del dataset"""
+    """Estrae descrittori completi dall'immagine - produce vettore di 33 feature"""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
     contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -111,11 +111,11 @@ def estrai_descrittori(img):
         x, y, w, h = cv2.boundingRect(cnt)
         aspect_ratio = float(w)/h if h != 0 else 0.0
 
-    # Hu moments
+    # Hu moments (7 feature)
     moments = cv2.moments(thresh)
     hu = cv2.HuMoments(moments).flatten().tolist()
 
-    # Codice cromatico radiale
+    # Codice cromatico radiale (4 raggi × 3 canali = 12 feature)
     h, w = img.shape[:2]
     cx, cy = w//2, h//2
     raggi = [int(min(h,w)*r) for r in (0.2, 0.4, 0.6, 0.8)]
@@ -126,7 +126,7 @@ def estrai_descrittori(img):
         mean = cv2.mean(img, mask=mask)[:3]
         radiale.extend([m/255.0 for m in mean])
 
-    # Codice cromatico spaziale (4 quadranti)
+    # Codice cromatico spaziale (4 quadranti × 3 canali = 12 feature)
     spaziale = []
     quadranti = [(0,0,cx,cy), (cx,0,w,cy), (0,cy,cx,h), (cx,cy,w,h)]
     for (x1,y1,x2,y2) in quadranti:
@@ -135,15 +135,15 @@ def estrai_descrittori(img):
             mean = cv2.mean(roi)[:3]
             spaziale.extend([m/255.0 for m in mean])
 
-    # Combina tutte le feature in un vettore (33 feature)
+    # Combina tutte le feature: 12 + 12 + 1 + 1 + 7 = 33 feature
     vettore = radiale + spaziale + [circularity, aspect_ratio] + hu
     return np.array(vettore, dtype=float)
 
 def get_features(img):
     """Estrae le feature nel formato atteso dal dataset (33 feature)"""
-    # Centra la figura (come nel creatore)
+    # Centra la figura
     img_centrata = centra_figura(img)
-    # Estrai descrittori
+    # Estrai descrittori (33 feature)
     return estrai_descrittori(img_centrata)
 
 # ================ DATASET =====================
@@ -166,7 +166,7 @@ def load_dataset():
             classes = [str(c) for c in unique]
         
         classes_fast = {i: classes[i] for i in range(len(classes))}
-        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes)} classi, {X_fast.shape[1]} feature")
+        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {X_fast.shape[1]} feature, {len(classes)} classi")
         return True
     except Exception as e:
         log(f"❌ Errore caricamento dataset: {e}")
@@ -178,6 +178,17 @@ def predict(img_crop):
         return None
     try:
         features = get_features(img_crop)
+        
+        # Verifica dimensioni (debug)
+        if len(features) != 33:
+            log(f"⚠️ Attenzione: feature ha {len(features)} dimensioni, attese 33")
+            # Forza a 33 nel caso
+            if len(features) > 33:
+                features = features[:33]
+            else:
+                # Padding con zeri
+                features = np.pad(features, (0, 33 - len(features)), 'constant')
+        
         # Calcola distanza euclidea con tutti i vettori del dataset
         distances = np.linalg.norm(X_fast - features, axis=1)
         best_idx = np.argmin(distances)
@@ -207,7 +218,7 @@ def crop_safe(img, coords):
 # ================ MAIN LOOP =====================
 def main():
     log("=" * 50)
-    log("🚀 Avvio DivellaEasy - Feature extraction IDENTICA al dataset")
+    log("🚀 Avvio DivellaEasy - Feature extraction 33 dimensioni")
     
     if not load_dataset():
         log("❌ Impossibile proseguire senza dataset")
@@ -293,6 +304,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
