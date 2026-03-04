@@ -12,7 +12,7 @@ from pathlib import Path
 
 # ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
-DATASET_URL = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download"
+DATASET_URL = "https://drive.google.com/uc?export=download&id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1"
 DIM = 64
 REQUEST_TIMEOUT = 15
 
@@ -31,29 +31,24 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 # ================ DOWNLOAD DATASET (UNA SOLA VOLTA) =====================
+import requests
+
 def download_dataset_if_missing():
-    """Scarica il dataset SOLO se non esiste già"""
     dataset_path = Path(DATASET_PATH)
-    
-    # Se esiste già, non fare nulla
-    if dataset_path.exists() and dataset_path.is_file():
-        log(f"✅ Dataset già presente: {DATASET_PATH}")
+    if dataset_path.exists():
         return True
+        
+    log("📥 Download dataset da Google Drive...")
+    # URL con conferma automatica
+    url = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download&confirm=t"
     
-    # Altrimenti scaricalo
-    log("📥 Dataset non trovato. Download da Google Drive...")
-    log("⏳ Questa operazione può richiedere qualche minuto (file ~1GB)")
+    response = requests.get(url, stream=True)
+    with open(dataset_path, 'wb') as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+    return True
     
-    # Crea la cartella dataset se non esiste
-    dataset_path.parent.mkdir(parents=True, exist_ok=True)
     
-    try:
-        urllib.request.urlretrieve(DATASET_URL, DATASET_PATH)
-        log(f"✅ Download completato! File salvato in: {DATASET_PATH}")
-        return True
-    except Exception as e:
-        log(f"❌ Errore download dataset: {e}")
-        return False
 
 # ================ DATASET =====================
 def load_dataset():
@@ -181,3 +176,4 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
