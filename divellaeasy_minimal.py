@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione FINALE con download automatico dataset
+# divellaeasy_minimal.py - Versione FINALE con download funzionante
 
 import os
 import time
 import requests
 import numpy as np
 import cv2
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 
 # ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
-DATASET_URL = "https://drive.google.com/uc?export=download&id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1"
+# Link diretto per download (NON è il link di visualizzazione)
+DATASET_URL = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download&confirm=t"
 DIM = 64
 REQUEST_TIMEOUT = 15
 
@@ -26,54 +26,76 @@ X_fast = None
 y_fast = None
 classes_fast = None
 
-# ================ LOG VELOCE =====================
+# ================ LOG =====================
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ================ DOWNLOAD DATASET (UNA SOLA VOLTA) =====================
-import requests
-
+# ================ DOWNLOAD =====================
 def download_dataset_if_missing():
+    """Scarica il dataset SOLO se non esiste già"""
     dataset_path = Path(DATASET_PATH)
-    if dataset_path.exists():
+    
+    # Se esiste già, non fare nulla
+    if dataset_path.exists() and dataset_path.is_file():
+        log(f"✅ Dataset già presente: {DATASET_PATH}")
+        return True
+    
+    # Crea la cartella dataset se non esiste
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    log("📥 Download dataset da Google Drive...")
+    log("⏳ Questa operazione può richiedere qualche minuto (file ~1GB)")
+    
+    try:
+        # Download con requests (più robusto)
+        response = requests.get(DATASET_URL, stream=True, timeout=60)
+        response.raise_for_status()
+        
+        # Verifica che non sia HTML
+        content_type = response.headers.get('content-type', '')
+        if 'text/html' in content_type:
+            log("❌ Il link restituisce una pagina HTML, non il file")
+            return False
+        
+        # Salva il file
+        with open(dataset_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        
+        log(f"✅ Download completato! File salvato in: {DATASET_PATH}")
         return True
         
-    log("📥 Download dataset da Google Drive...")
-    # URL con conferma automatica
-    url = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download&confirm=t"
-    
-    response = requests.get(url, stream=True)
-    with open(dataset_path, 'wb') as f:
-        for chunk in response.iter_content(chunk_size=8192):
-            f.write(chunk)
-    return True
-    
-    
+    except Exception as e:
+        log(f"❌ Errore download: {e}")
+        return False
 
 # ================ DATASET =====================
 def load_dataset():
     global X_fast, y_fast, classes_fast
     
-    # Prima controlla e scarica se necessario
     if not download_dataset_if_missing():
-        log("❌ Impossibile caricare il dataset. Uscita.")
+        log("❌ Impossibile ottenere il dataset")
         return False
     
-    data = np.load(DATASET_PATH, allow_pickle=True)
-    X_fast = data["X"].astype(np.float32)
-    y_fast = data["y"].astype(np.int32)
-    
-    if "classes" in data.files:
-        classes = list(np.array(data["classes"], dtype=object).tolist())
-    else:
-        unique = sorted(list(set(int(x) for x in y_fast.tolist())))
-        classes = [str(c) for c in unique]
-    
-    classes_fast = {i: classes[i] for i in range(len(classes))}
-    log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {len(classes)} classi")
-    return True
+    try:
+        data = np.load(DATASET_PATH, allow_pickle=True)
+        X_fast = data["X"].astype(np.float32)
+        y_fast = data["y"].astype(np.int32)
+        
+        if "classes" in data.files:
+            classes = list(np.array(data["classes"], dtype=object).tolist())
+        else:
+            unique = sorted(list(set(int(x) for x in y_fast.tolist())))
+            classes = [str(c) for c in unique]
+        
+        classes_fast = {i: classes[i] for i in range(len(classes))}
+        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori")
+        return True
+    except Exception as e:
+        log(f"❌ Errore caricamento dataset: {e}")
+        return False
 
-# ================ FEATURE EXTRACTION MINIMAL =====================
+# ================ FEATURE EXTRACTION =====================
 def get_features(img):
     img = cv2.resize(img, (DIM, DIM))
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
@@ -87,14 +109,30 @@ def predict(img_crop):
     best_idx = np.argmin(distances)
     return classes_fast.get(int(y_fast[best_idx]), "errore")
 
+# ================ CROP =====================
+def crop_safe(img, coords):
+    try:
+        x1, y1, x2, y2 = map(int, coords.split(","))
+    except:
+        return None
+    
+    h, w = img.shape[:2]
+    x1 = max(0, min(w-1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h-1, y1))
+    y2 = max(0, min(h, y2))
+    
+    if x2 <= x1 or y2 <= y1:
+        return None
+    
+    return img[y1:y2, x1:x2]
+
 # ================ MAIN LOOP =====================
 def main():
     log("=" * 50)
-    log("🚀 Avvio DivellaEasy Minimal - Versione con download automatico")
+    log("🚀 Avvio DivellaEasy")
     
-    # Carica dataset (lo scarica se necessario)
     if not load_dataset():
-        log("❌ Errore fatale: impossibile caricare il dataset")
         return
     
     headers = {
@@ -105,13 +143,12 @@ def main():
     
     while True:
         try:
-            # Richiedi surf
             r = session.post(
                 "https://www.easyhits4u.com/surf/?ajax=1&try=1",
                 headers=headers, verify=False, timeout=REQUEST_TIMEOUT
             )
             if r.status_code != 200:
-                log(f"❌ Status {r.status_code} - Cookie forse scaduto?")
+                log(f"❌ Status {r.status_code}")
                 break
             
             data = r.json()
@@ -121,23 +158,19 @@ def main():
             picmap = data.get("picmap", [])
             
             if not urlid or not qpic or len(picmap) < 5:
-                log("❌ Dati incompleti - Cookie forse scaduto?")
+                log("❌ Dati incompleti")
                 break
             
-            # Scarica immagine
             img_data = session.get(f"https://www.easyhits4u.com/simg/{qpic}.jpg", verify=False).content
             img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
             
-            # Riconosci le figure
             crops = []
             for p in picmap:
-                x1, y1, x2, y2 = map(int, p["coords"].split(","))
-                crops.append(img[y1:y2, x1:x2])
+                crops.append(crop_safe(img, p.get("coords", "")))
             
             labels = [predict(c) for c in crops]
             log(f"Labels: {labels}")
             
-            # Trova il primo duplicato
             seen = {}
             chosen_idx = None
             for i, label in enumerate(labels):
@@ -148,11 +181,9 @@ def main():
                     seen[label] = i
             
             if chosen_idx is None:
-                log("❌ Nessun duplicato trovato")
-                cv2.imwrite(f"errore_{qpic}.jpg", img)
+                log("❌ Nessun duplicato")
                 break
             
-            # Aspetta e invia
             time.sleep(seconds)
             word = picmap[chosen_idx]["value"]
             resp = session.get(
@@ -163,10 +194,9 @@ def main():
             
             if resp.json().get("warning") == "wrong_choice":
                 log("❌ Wrong choice")
-                cv2.imwrite(f"errore_{qpic}.jpg", img)
                 break
             
-            log(f"✅ OK - {len(labels)} labels")
+            log(f"✅ OK")
             time.sleep(2)
             
         except Exception as e:
@@ -176,4 +206,5 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
