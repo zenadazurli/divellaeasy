@@ -40,14 +40,20 @@ def download_dataset_if_missing():
         log(f"✅ Dataset già presente: {DATASET_PATH}")
         return True
     
-    # Crea la cartella dataset se non esiste
-    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    # CREA LA CARTELLA - Versione più esplicita
+    log(f"📁 Creazione cartella: {dataset_path.parent}")
+    os.makedirs(dataset_path.parent, exist_ok=True)
+    
+    # Verifica che la cartella sia stata creata
+    if not os.path.exists(dataset_path.parent):
+        log(f"❌ Impossibile creare la cartella {dataset_path.parent}")
+        return False
     
     log("📥 Download dataset da Google Drive...")
     log("⏳ Questa operazione può richiedere qualche minuto (file ~1GB)")
     
     try:
-        # Download con requests (più robusto)
+        # Download con requests
         response = requests.get(DATASET_URL, stream=True, timeout=60)
         response.raise_for_status()
         
@@ -62,8 +68,13 @@ def download_dataset_if_missing():
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
         
-        log(f"✅ Download completato! File salvato in: {DATASET_PATH}")
-        return True
+        # Verifica che il file sia stato creato
+        if dataset_path.exists():
+            log(f"✅ Download completato! File salvato in: {DATASET_PATH}")
+            return True
+        else:
+            log("❌ File non trovato dopo il download")
+            return False
         
     except Exception as e:
         log(f"❌ Errore download: {e}")
@@ -206,5 +217,6 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
