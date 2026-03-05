@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione con Hugging Face (memory-mapped)
+# divellaeasy_minimal.py - Versione Hugging Face con token da ambiente
 
 import os
 import time
@@ -30,15 +30,16 @@ def log(msg):
 def load_dataset_hf():
     global dataset, classes_fast
     log("📥 Caricamento dataset da Hugging Face Hub...")
+    # Legge il token dalla variabile d'ambiente
+    hf_token = os.environ.get('HF_TOKEN')
+    if hf_token is None:
+        log("❌ Token HF_TOKEN non trovato nelle variabili d'ambiente")
+        return False
     try:
-        # Carica il dataset in modalità memory-mapped (non occupa RAM)
-        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=True)
-        # Il token True usa quello salvato nelle credenziali (se presente)
-        # In alternativa, puoi passare il token come stringa: token="hf_..."
+        # Usa il token esplicitamente
+        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=hf_token)
         log(f"✅ Dataset caricato: {len(dataset)} vettori")
-        log(f"🔍 Features: {dataset.features}")
         # Prepara le classi (per la conversione da indice a nome)
-        # Le classi sono in dataset.features['y'].names
         class_names = dataset.features['y'].names
         classes_fast = {i: name for i, name in enumerate(class_names)}
         return True
@@ -46,7 +47,7 @@ def load_dataset_hf():
         log(f"❌ Errore caricamento dataset: {e}")
         return False
 
-# ================ FUNZIONI DI FEATURE EXTRACTION (IDENTICHE A PRIMA) =====================
+# ================ FUNZIONI DI FEATURE EXTRACTION =====================
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -102,7 +103,7 @@ def get_features(img):
     img_centrata = centra_figura(img)
     return estrai_descrittori(img_centrata)
 
-# ================ PREDIZIONE (SU DATASET STREAMING) =====================
+# ================ PREDIZIONE =====================
 def predict(img_crop):
     if img_crop is None or img_crop.size == 0:
         return None
@@ -122,6 +123,21 @@ def predict(img_crop):
     if best_label_idx is not None:
         return classes_fast.get(int(best_label_idx), "errore")
     return "errore"
+
+# ================ CROP SICURO =====================
+def crop_safe(img, coords):
+    try:
+        x1, y1, x2, y2 = map(int, coords.split(","))
+    except:
+        return None
+    h, w = img.shape[:2]
+    x1 = max(0, min(w-1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h-1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return img[y1:y2, x1:x2]
 
 # ================ MAIN LOOP =====================
 def main():
@@ -186,23 +202,10 @@ def main():
             log(f"❌ Errore: {e}")
             break
 
-def crop_safe(img, coords):
-    try:
-        x1, y1, x2, y2 = map(int, coords.split(","))
-    except:
-        return None
-    h, w = img.shape[:2]
-    x1 = max(0, min(w-1, x1))
-    x2 = max(0, min(w, x2))
-    y1 = max(0, min(h-1, y1))
-    y2 = max(0, min(h, y2))
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return img[y1:y2, x1:x2]
-
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
