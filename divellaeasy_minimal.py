@@ -15,7 +15,7 @@ REQUEST_TIMEOUT = 15
 
 # ================ DATI ACCOUNT =====================
 UID = "2288011"
-COOKIE_SESIDS = "KTeaAXDgWL"  # <-- SOSTITUISCI QUANDO SCADE
+COOKIE_SESIDS = "XoYCfRQuha"  # <-- SOSTITUISCI QUANDO SCADE
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -210,6 +210,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
