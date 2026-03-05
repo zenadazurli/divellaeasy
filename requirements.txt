@@ -1,6 +1,6 @@
 opencv-python-headless
 numpy
 requests
-urllib3
 datasets
 huggingface-hub
+
