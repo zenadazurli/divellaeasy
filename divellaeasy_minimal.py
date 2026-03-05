@@ -1,120 +1,212 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione con logging estremo su file
+# divellaeasy_minimal.py - Versione FINALE con feature extraction 33 dimensioni
 
 import os
-import sys
 import time
+import requests
+import numpy as np
+import cv2
 from datetime import datetime
+from pathlib import Path
 
-# ================ CONFIG LOGGING =====================
-LOG_DIR = "/opt/render/project/src/logs"
-os.makedirs(LOG_DIR, exist_ok=True)
-LOG_FILE = f"{LOG_DIR}/debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
-def log_to_file(msg):
-    """Scrive messaggio su file di log con timestamp"""
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with open(LOG_FILE, 'a', encoding='utf-8') as f:
-        f.write(f"[{timestamp}] {msg}\n")
-    # Stampa anche a video per i log di Render
-    print(f"[{timestamp}] {msg}")
-
-# Inizio logging
-log_to_file("🚀 SCRIPT AVVIATO")
-log_to_file(f"Python version: {sys.version}")
-log_to_file(f"Current directory: {os.getcwd()}")
-log_to_file(f"Files in current dir: {os.listdir('.')}")
-
-# ================ TEST IMPORTAZIONI =====================
-log_to_file("--- Test importazioni ---")
-
-try:
-    import cv2
-    log_to_file("✅ OpenCV importato")
-    log_to_file(f"OpenCV version: {cv2.__version__}")
-except Exception as e:
-    log_to_file(f"❌ OpenCV ERRORE: {e}")
-
-try:
-    import numpy as np
-    log_to_file("✅ NumPy importato")
-    log_to_file(f"NumPy version: {np.__version__}")
-except Exception as e:
-    log_to_file(f"❌ NumPy ERRORE: {e}")
-
-try:
-    import requests
-    log_to_file("✅ Requests importato")
-    log_to_file(f"Requests version: {requests.__version__}")
-except Exception as e:
-    log_to_file(f"❌ Requests ERRORE: {e}")
-
-try:
-    from pathlib import Path
-    log_to_file("✅ Pathlib importato")
-except Exception as e:
-    log_to_file(f"❌ Pathlib ERRORE: {e}")
-
-# ================ VERIFICA DATASET =====================
-log_to_file("--- Verifica dataset ---")
-
+# ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
-dataset_full_path = os.path.join(os.getcwd(), DATASET_PATH)
-log_to_file(f"Cerco dataset in: {dataset_full_path}")
+DIM = 64
+REQUEST_TIMEOUT = 15
 
-if os.path.exists(DATASET_PATH):
-    log_to_file(f"✅ File dataset trovato")
-    file_size = os.path.getsize(DATASET_PATH)
-    log_to_file(f"Dimensione: {file_size} bytes ({file_size/1024/1024:.2f} MB)")
-else:
-    log_to_file(f"❌ File dataset NON trovato")
+# ================ DATI ACCOUNT =====================
+UID = "2288011"
+COOKIE_SESIDS = "KTeaAXDgWL"
+COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
-# ================ TENTATIVO CARICAMENTO DATASET =====================
-log_to_file("--- Tentativo caricamento dataset ---")
+# ================ GLOBALS =====================
+X_fast = None
+y_fast = None
+classes_fast = None
 
-try:
-    data = np.load(DATASET_PATH, allow_pickle=True)
-    log_to_file("✅ np.load riuscito")
-    
-    if "X" in data.files:
-        X = data["X"]
-        log_to_file(f"✅ X trovato con shape: {X.shape}")
-    else:
-        log_to_file("❌ X non trovato nel file")
-        
-    if "y" in data.files:
-        y = data["y"]
-        log_to_file(f"✅ y trovato con shape: {y.shape}")
-    else:
-        log_to_file("❌ y non trovato nel file")
-        
-    if "classes" in data.files:
-        classes = data["classes"]
-        log_to_file(f"✅ classes trovato con shape: {classes.shape if hasattr(classes, 'shape') else len(classes)}")
-    else:
-        log_to_file("ℹ️ classes non trovato (non grave)")
-        
-except Exception as e:
-    log_to_file(f"❌ ERRORE caricamento dataset: {e}")
-    import traceback
-    log_to_file(traceback.format_exc())
+# ================ LOG =====================
+def log(msg):
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-log_to_file("=" * 50)
-log_to_file(f"Log completato. File salvato in: {LOG_FILE}")
-log_to_file("=" * 50)
+# ================ FUNZIONI DI FEATURE EXTRACTION =====================
+def centra_figura(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return cv2.resize(image, (DIM, DIM))
+    cnt = max(contours, key=cv2.contourArea)
+    x, y, w, h = cv2.boundingRect(cnt)
+    crop = image[y:y+h, x:x+w]
+    return cv2.resize(crop, (DIM, DIM))
 
-# ================ SE TUTTO OK, PROCEDO CON LO SCRIPT =====================
-try:
-    # Qui puoi mettere il resto del tuo script originale
-    # Per ora lasciamo un loop di test
-    log_to_file("--- Avvio loop principale ---")
-    counter = 0
+def estrai_descrittori(img):
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    circularity = 0.0
+    aspect_ratio = 0.0
+    if contours:
+        cnt = max(contours, key=cv2.contourArea)
+        peri = cv2.arcLength(cnt, True)
+        area = cv2.contourArea(cnt)
+        if peri != 0:
+            circularity = 4.0 * np.pi * area / (peri * peri)
+        x, y, w, h = cv2.boundingRect(cnt)
+        aspect_ratio = float(w)/h if h != 0 else 0.0
+
+    moments = cv2.moments(thresh)
+    hu = cv2.HuMoments(moments).flatten().tolist()
+
+    h, w = img.shape[:2]
+    cx, cy = w//2, h//2
+    raggi = [int(min(h,w)*r) for r in (0.2, 0.4, 0.6, 0.8)]
+    radiale = []
+    for r in raggi:
+        mask = np.zeros((h,w), np.uint8)
+        cv2.circle(mask, (cx,cy), r, 255, -1)
+        mean = cv2.mean(img, mask=mask)[:3]
+        radiale.extend([m/255.0 for m in mean])
+
+    spaziale = []
+    quadranti = [(0,0,cx,cy), (cx,0,w,cy), (0,cy,cx,h), (cx,cy,w,h)]
+    for (x1,y1,x2,y2) in quadranti:
+        roi = img[y1:y2, x1:x2]
+        if roi.size > 0:
+            mean = cv2.mean(roi)[:3]
+            spaziale.extend([m/255.0 for m in mean])
+
+    vettore = radiale + spaziale + [circularity, aspect_ratio] + hu
+    return np.array(vettore, dtype=float)
+
+def get_features(img):
+    img_centrata = centra_figura(img)
+    return estrai_descrittori(img_centrata)
+
+# ================ DATASET =====================
+def load_dataset():
+    global X_fast, y_fast, classes_fast
+    if not os.path.exists(DATASET_PATH):
+        log(f"❌ Dataset non trovato in {DATASET_PATH}")
+        return False
+    try:
+        data = np.load(DATASET_PATH, allow_pickle=True)
+        X_fast = data["X"].astype(np.float32)
+        y_fast = data["y"].astype(np.int32)
+        if "classes" in data.files:
+            classes = list(np.array(data["classes"], dtype=object).tolist())
+        else:
+            unique = sorted(list(set(int(x) for x in y_fast.tolist())))
+            classes = [str(c) for c in unique]
+        classes_fast = {i: classes[i] for i in range(len(classes))}
+        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {X_fast.shape[1]} feature, {len(classes)} classi")
+        return True
+    except Exception as e:
+        log(f"❌ Errore caricamento dataset: {e}")
+        return False
+
+# ================ PREDIZIONE =====================
+def predict(img_crop):
+    if img_crop is None or img_crop.size == 0:
+        return None
+    try:
+        features = get_features(img_crop)
+        if len(features) != 33:
+            log(f"⚠️ Attenzione: feature ha {len(features)} dimensioni, attese 33")
+            if len(features) > 33:
+                features = features[:33]
+            else:
+                features = np.pad(features, (0, 33 - len(features)), 'constant')
+        distances = np.linalg.norm(X_fast - features, axis=1)
+        best_idx = np.argmin(distances)
+        return classes_fast.get(int(y_fast[best_idx]), "errore")
+    except Exception as e:
+        log(f"Errore in predict: {e}")
+        return "errore"
+
+# ================ CROP SICURO =====================
+def crop_safe(img, coords):
+    try:
+        x1, y1, x2, y2 = map(int, coords.split(","))
+    except:
+        return None
+    h, w = img.shape[:2]
+    x1 = max(0, min(w-1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h-1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return img[y1:y2, x1:x2]
+
+# ================ MAIN LOOP =====================
+def main():
+    log("=" * 50)
+    log("🚀 Avvio DivellaEasy - Feature extraction 33 dimensioni")
+    if not load_dataset():
+        log("❌ Impossibile proseguire senza dataset")
+        return
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Cookie": COOKIE_STRING
+    }
+    session = requests.Session()
     while True:
-        counter += 1
-        log_to_file(f"🔄 Ciclo #{counter} - Script in esecuzione")
-        time.sleep(60)
-except Exception as e:
-    log_to_file(f"❌ ERRORE nel loop principale: {e}")
+        try:
+            r = session.post(
+                "https://www.easyhits4u.com/surf/?ajax=1&try=1",
+                headers=headers, verify=False, timeout=REQUEST_TIMEOUT
+            )
+            if r.status_code != 200:
+                log(f"❌ Status {r.status_code} - Cookie forse scaduto?")
+                break
+            data = r.json()
+            urlid = data.get("surfses", {}).get("urlid")
+            qpic = data.get("surfses", {}).get("qpic")
+            seconds = int(data.get("surfses", {}).get("seconds", 20))
+            picmap = data.get("picmap", [])
+            if not urlid or not qpic or len(picmap) < 5:
+                log("❌ Dati incompleti - Cookie forse scaduto?")
+                break
+            img_data = session.get(f"https://www.easyhits4u.com/simg/{qpic}.jpg", verify=False).content
+            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
+            crops = [crop_safe(img, p.get("coords", "")) for p in picmap]
+            labels = [predict(c) for c in crops]
+            log(f"Labels: {labels}")
+            seen = {}
+            chosen_idx = None
+            for i, label in enumerate(labels):
+                if label and label != "errore":
+                    if label in seen:
+                        chosen_idx = seen[label]
+                        break
+                    seen[label] = i
+            if chosen_idx is None:
+                log("❌ Nessun duplicato trovato")
+                cv2.imwrite(f"errore_{qpic}.jpg", img)
+                break
+            time.sleep(seconds)
+            word = picmap[chosen_idx]["value"]
+            resp = session.get(
+                f"https://www.easyhits4u.com/surf/?f=surf&urlid={urlid}&surftype=2"
+                f"&ajax=1&word={word}&screen_width=1024&screen_height=768",
+                headers=headers, verify=False
+            )
+            if resp.json().get("warning") == "wrong_choice":
+                log("❌ Wrong choice")
+                cv2.imwrite(f"errore_{qpic}.jpg", img)
+                break
+            log(f"✅ OK - indice {chosen_idx}")
+            time.sleep(2)
+        except Exception as e:
+            log(f"❌ Errore: {e}")
+            break
+
+if __name__ == "__main__":
+    main()
+    log("🏁 Script terminato")
+
 
 
 
