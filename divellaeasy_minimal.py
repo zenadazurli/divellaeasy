@@ -9,6 +9,26 @@ import cv2
 from datetime import datetime
 from pathlib import Path
 
+import sys
+
+# Forza l'output su file (oltre che su console)
+class Tee:
+    def __init__(self, name, mode):
+        self.file = open(name, mode, buffering=1)
+        self.stdout = sys.stdout
+        sys.stdout = self
+    def write(self, data):
+        self.file.write(data)
+        self.stdout.write(data)
+    def flush(self):
+        self.file.flush()
+        self.stdout.flush()
+
+# Crea un file di log con timestamp
+log_filename = f"/opt/render/project/src/debug_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+tee = Tee(log_filename, 'w')
+print(f"🔍 Logging attivato su: {log_filename}")
+
 # ================ CONFIG =====================
 DATASET_PATH = "dataset/dataset_speed.npz"
 DATASET_URL = "https://drive.usercontent.google.com/download?id=1fKdNNNN0tEh298RpNsubH9ajIiIzcQm1&export=download&confirm=t"
@@ -235,6 +255,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
