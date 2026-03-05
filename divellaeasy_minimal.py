@@ -15,7 +15,7 @@ REQUEST_TIMEOUT = 15
 
 # ================ DATI ACCOUNT =====================
 UID = "2288011"
-COOKIE_SESIDS = "KTeaAXDgWL"  # Aggiorna quando scade
+COOKIE_SESIDS = "KTeaAXDgWL"  # <-- SOSTITUISCI QUANDO SCADE
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -30,14 +30,19 @@ def log(msg):
 def load_dataset_hf():
     global dataset, classes_fast
     log("📥 Caricamento dataset da Hugging Face Hub...")
-    # Legge il token dalla variabile d'ambiente
+    
+    # Legge il token dalla variabile d'ambiente (opzionale se dataset pubblico)
     hf_token = os.environ.get('HF_TOKEN')
     if hf_token is None:
-        log("❌ Token HF_TOKEN non trovato nelle variabili d'ambiente")
-        return False
+        log("⚠️ Token HF_TOKEN non trovato, tentativo senza autenticazione (dataset pubblico)")
+        # Se il dataset è pubblico, non serve token
+        token_param = None
+    else:
+        token_param = hf_token
+    
     try:
-        # Usa il token esplicitamente
-        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=hf_token)
+        # Carica il dataset (con o senza token)
+        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=token_param)
         log(f"✅ Dataset caricato: {len(dataset)} vettori")
         # Prepara le classi (per la conversione da indice a nome)
         class_names = dataset.features['y'].names
@@ -205,6 +210,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
