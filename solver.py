@@ -1,24 +1,17 @@
 #!/usr/bin/env python3
-# solver.py - Versione con output visibile
+# solver.py - Versione con output ogni 10 secondi
 
 import time
 from datetime import datetime
 import os
+import sys
 
-print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 SOLVER AVVIATO CON SUCCESSO!")
-print(f"Directory: {os.getcwd()}")
-print(f"File presenti: {os.listdir('.')}")
-
-# Verifica dataset
-dataset_path = "dataset/dataset_speed.npz"
-if os.path.exists(dataset_path):
-    size = os.path.getsize(dataset_path)
-    print(f"✅ Dataset trovato: {size} bytes")
-else:
-    print(f"❌ Dataset non trovato")
+print(f"[{datetime.now().strftime('%H:%M:%S')}] 🚀 SOLVER PARTITO!", flush=True)
+print(f"Directory: {os.getcwd()}", flush=True)
+print(f"File: {os.listdir('.')}", flush=True)
 
 counter = 0
 while True:
     counter += 1
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔁 Ciclo #{counter} - FUNZIONA!")
-    time.sleep(30)
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 🔁 Ciclo #{counter} - VIVO!", flush=True)
+    time.sleep(10)
