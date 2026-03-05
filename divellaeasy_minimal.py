@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione FINALE con feature extraction 33 dimensioni
+# divellaeasy_minimal.py - Versione con Hugging Face (memory-mapped)
 
 import os
 import time
@@ -7,28 +7,46 @@ import requests
 import numpy as np
 import cv2
 from datetime import datetime
-from pathlib import Path
+from datasets import load_dataset
 
 # ================ CONFIG =====================
-DATASET_PATH = "dataset/dataset_speed.npz"
 DIM = 64
 REQUEST_TIMEOUT = 15
 
 # ================ DATI ACCOUNT =====================
 UID = "2288011"
-COOKIE_SESIDS = "KTeaAXDgWL"
+COOKIE_SESIDS = "KTeaAXDgWL"  # Aggiorna quando scade
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
-X_fast = None
-y_fast = None
+dataset = None
 classes_fast = None
 
 # ================ LOG =====================
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ================ FUNZIONI DI FEATURE EXTRACTION =====================
+# ================ CARICAMENTO DATASET (HUGGING FACE) =====================
+def load_dataset_hf():
+    global dataset, classes_fast
+    log("📥 Caricamento dataset da Hugging Face Hub...")
+    try:
+        # Carica il dataset in modalità memory-mapped (non occupa RAM)
+        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=True)
+        # Il token True usa quello salvato nelle credenziali (se presente)
+        # In alternativa, puoi passare il token come stringa: token="hf_..."
+        log(f"✅ Dataset caricato: {len(dataset)} vettori")
+        log(f"🔍 Features: {dataset.features}")
+        # Prepara le classi (per la conversione da indice a nome)
+        # Le classi sono in dataset.features['y'].names
+        class_names = dataset.features['y'].names
+        classes_fast = {i: name for i, name in enumerate(class_names)}
+        return True
+    except Exception as e:
+        log(f"❌ Errore caricamento dataset: {e}")
+        return False
+
+# ================ FUNZIONI DI FEATURE EXTRACTION (IDENTICHE A PRIMA) =====================
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -84,67 +102,32 @@ def get_features(img):
     img_centrata = centra_figura(img)
     return estrai_descrittori(img_centrata)
 
-# ================ DATASET =====================
-def load_dataset():
-    global X_fast, y_fast, classes_fast
-    if not os.path.exists(DATASET_PATH):
-        log(f"❌ Dataset non trovato in {DATASET_PATH}")
-        return False
-    try:
-        data = np.load(DATASET_PATH, allow_pickle=True)
-        X_fast = data["X"].astype(np.float32)
-        y_fast = data["y"].astype(np.int32)
-        if "classes" in data.files:
-            classes = list(np.array(data["classes"], dtype=object).tolist())
-        else:
-            unique = sorted(list(set(int(x) for x in y_fast.tolist())))
-            classes = [str(c) for c in unique]
-        classes_fast = {i: classes[i] for i in range(len(classes))}
-        log(f"✅ Dataset caricato: {X_fast.shape[0]} vettori, {X_fast.shape[1]} feature, {len(classes)} classi")
-        return True
-    except Exception as e:
-        log(f"❌ Errore caricamento dataset: {e}")
-        return False
-
-# ================ PREDIZIONE =====================
+# ================ PREDIZIONE (SU DATASET STREAMING) =====================
 def predict(img_crop):
     if img_crop is None or img_crop.size == 0:
         return None
-    try:
-        features = get_features(img_crop)
-        if len(features) != 33:
-            log(f"⚠️ Attenzione: feature ha {len(features)} dimensioni, attese 33")
-            if len(features) > 33:
-                features = features[:33]
-            else:
-                features = np.pad(features, (0, 33 - len(features)), 'constant')
-        distances = np.linalg.norm(X_fast - features, axis=1)
-        best_idx = np.argmin(distances)
-        return classes_fast.get(int(y_fast[best_idx]), "errore")
-    except Exception as e:
-        log(f"Errore in predict: {e}")
-        return "errore"
-
-# ================ CROP SICURO =====================
-def crop_safe(img, coords):
-    try:
-        x1, y1, x2, y2 = map(int, coords.split(","))
-    except:
-        return None
-    h, w = img.shape[:2]
-    x1 = max(0, min(w-1, x1))
-    x2 = max(0, min(w, x2))
-    y1 = max(0, min(h-1, y1))
-    y2 = max(0, min(h, y2))
-    if x2 <= x1 or y2 <= y1:
-        return None
-    return img[y1:y2, x1:x2]
+    features = get_features(img_crop)
+    best_dist = float('inf')
+    best_label_idx = None
+    # Scorriamo il dataset in batch per non consumare troppa memoria
+    batch_size = 1000
+    for i in range(0, len(dataset), batch_size):
+        batch = dataset[i:i+batch_size]
+        X_batch = np.array(batch['X'])  # (batch_size, 33)
+        distances = np.linalg.norm(X_batch - features, axis=1)
+        min_idx_batch = np.argmin(distances)
+        if distances[min_idx_batch] < best_dist:
+            best_dist = distances[min_idx_batch]
+            best_label_idx = batch['y'][min_idx_batch]
+    if best_label_idx is not None:
+        return classes_fast.get(int(best_label_idx), "errore")
+    return "errore"
 
 # ================ MAIN LOOP =====================
 def main():
     log("=" * 50)
-    log("🚀 Avvio DivellaEasy - Feature extraction 33 dimensioni")
-    if not load_dataset():
+    log("🚀 Avvio DivellaEasy - Versione Hugging Face")
+    if not load_dataset_hf():
         log("❌ Impossibile proseguire senza dataset")
         return
     headers = {
@@ -203,9 +186,24 @@ def main():
             log(f"❌ Errore: {e}")
             break
 
+def crop_safe(img, coords):
+    try:
+        x1, y1, x2, y2 = map(int, coords.split(","))
+    except:
+        return None
+    h, w = img.shape[:2]
+    x1 = max(0, min(w-1, x1))
+    x2 = max(0, min(w, x2))
+    y1 = max(0, min(h-1, y1))
+    y2 = max(0, min(h, y2))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return img[y1:y2, x1:x2]
+
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
