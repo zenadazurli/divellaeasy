@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione Hugging Face con token da ambiente
+# divellaeasy_minimal.py - Versione FINALE con FAISS (basso consumo memoria)
 
 import os
 import time
 import requests
 import numpy as np
 import cv2
+import faiss
+import json
 from datetime import datetime
 from datasets import load_dataset
 
 # ================ CONFIG =====================
 DIM = 64
 REQUEST_TIMEOUT = 15
+ERRORI_DIR = "errori"  # cartella dove salvare gli errori
 
 # ================ DATI ACCOUNT =====================
-UID = "2288881"
-COOKIE_SESIDS = "YSLxMR0o2S"  # <-- SOSTITUISCI QUANDO SCADE
+UID = "2288011"
+COOKIE_SESIDS = "KTeaAXDgWL"  # <-- SOSTITUISCI QUANDO SCADE
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
 dataset = None
 classes_fast = None
+faiss_index = None  # indice FAISS per ricerca veloce
+vector_dim = 33     # dimensione dei vettori nel dataset
 
 # ================ LOG =====================
 def log(msg):
@@ -28,25 +33,48 @@ def log(msg):
 
 # ================ CARICAMENTO DATASET (HUGGING FACE) =====================
 def load_dataset_hf():
-    global dataset, classes_fast
+    global dataset, classes_fast, faiss_index
     log("📥 Caricamento dataset da Hugging Face Hub...")
-    
-    # Legge il token dalla variabile d'ambiente (opzionale se dataset pubblico)
     hf_token = os.environ.get('HF_TOKEN')
     if hf_token is None:
         log("⚠️ Token HF_TOKEN non trovato, tentativo senza autenticazione (dataset pubblico)")
-        # Se il dataset è pubblico, non serve token
         token_param = None
     else:
         token_param = hf_token
-    
     try:
-        # Carica il dataset (con o senza token)
         dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=token_param)
         log(f"✅ Dataset caricato: {len(dataset)} vettori")
-        # Prepara le classi (per la conversione da indice a nome)
         class_names = dataset.features['y'].names
         classes_fast = {i: name for i, name in enumerate(class_names)}
+        
+        # COSTRUZIONE INDICE FAISS
+        log("🔧 Costruzione indice FAISS (ottimizzato per memoria)...")
+        # Raccogli tutti i vettori X in un array numpy
+        X_list = []
+        batch_size = 10000
+        for i in range(0, len(dataset), batch_size):
+            batch = dataset[i:i+batch_size]
+            X_list.append(np.array(batch['X'], dtype=np.float32))
+        X_all = np.vstack(X_list)
+        log(f"📊 Vettori caricati: {X_all.shape}")
+        
+        # Crea indice con Product Quantization (bassissimo consumo memoria)
+        nlist = 100          # numero di cluster (centroidi)
+        m = 8                # numero di sottovettori per PQ (più piccolo = meno memoria)
+        d = vector_dim       # dimensione vettori (33)
+        
+        # Quantizzatore (per la ricerca esatta sui centroidi)
+        quantizer = faiss.IndexFlatL2(d)
+        # Indice IVF con Product Quantization
+        index = faiss.IndexIVFPQ(quantizer, d, nlist, m, 8)
+        
+        # Addestra l'indice (richiede un po' di tempo ma si fa una volta)
+        log("🏋️ Addestramento indice FAISS...")
+        index.train(X_all)
+        # Aggiunge i vettori
+        index.add(X_all)
+        log(f"✅ Indice FAISS creato con {index.ntotal} vettori")
+        faiss_index = index
         return True
     except Exception as e:
         log(f"❌ Errore caricamento dataset: {e}")
@@ -108,26 +136,29 @@ def get_features(img):
     img_centrata = centra_figura(img)
     return estrai_descrittori(img_centrata)
 
-# ================ PREDIZIONE =====================
+# ================ PREDIZIONE CON FAISS =====================
 def predict(img_crop):
+    global faiss_index, classes_fast
     if img_crop is None or img_crop.size == 0:
         return None
-    features = get_features(img_crop)
-    best_dist = float('inf')
-    best_label_idx = None
-    # Scorriamo il dataset in batch per non consumare troppa memoria
-    batch_size = 1000
-    for i in range(0, len(dataset), batch_size):
-        batch = dataset[i:i+batch_size]
-        X_batch = np.array(batch['X'])  # (batch_size, 33)
-        distances = np.linalg.norm(X_batch - features, axis=1)
-        min_idx_batch = np.argmin(distances)
-        if distances[min_idx_batch] < best_dist:
-            best_dist = distances[min_idx_batch]
-            best_label_idx = batch['y'][min_idx_batch]
-    if best_label_idx is not None:
-        return classes_fast.get(int(best_label_idx), "errore")
-    return "errore"
+    features = get_features(img_crop).astype(np.float32).reshape(1, -1)
+    
+    # Cerca il vicino più vicino con FAISS
+    k = 1  # numero di vicini da cercare
+    distances, indices = faiss_index.search(features, k)
+    best_idx = indices[0][0]
+    
+    # Recupera l'etichetta reale (non l'indice del cluster)
+    # Nota: l'indice restituito da FAISS è l'indice del vettore originale
+    # Quindi possiamo usare dataset['y'][best_idx] per l'etichetta
+    # MA ATTENZIONE: FAISS restituisce l'indice nel database, che corrisponde
+    # alla posizione originale nel dataset. Possiamo usare direttamente quello.
+    
+    # Opzione 1: se abbiamo mantenuto l'ordine originale (X_all è stato aggiunto in ordine)
+    # l'indice corrisponde direttamente alla posizione nel dataset
+    # Quindi:
+    true_label_idx = dataset['y'][best_idx]
+    return classes_fast.get(int(true_label_idx), "errore")
 
 # ================ CROP SICURO =====================
 def crop_safe(img, coords):
@@ -144,10 +175,48 @@ def crop_safe(img, coords):
         return None
     return img[y1:y2, x1:x2]
 
+# ================ SALVATAGGIO ERRORI =====================
+def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    folder = os.path.join(ERRORI_DIR, f"{timestamp}_{qpic}")
+    os.makedirs(folder, exist_ok=True)
+    
+    full_path = os.path.join(folder, "full.jpg")
+    cv2.imwrite(full_path, img)
+    
+    crops_saved = []
+    for i, p in enumerate(picmap):
+        crop = crop_safe(img, p.get("coords", ""))
+        if crop is not None and crop.size > 0:
+            crop_filename = f"crop_{i+1}.jpg"
+            crop_path = os.path.join(folder, crop_filename)
+            cv2.imwrite(crop_path, crop)
+            crops_saved.append(crop_filename)
+        else:
+            crops_saved.append(None)
+    
+    metadata = {
+        "timestamp": timestamp,
+        "qpic": qpic,
+        "urlid": urlid,
+        "motivo": motivo,
+        "labels_predette": labels,
+        "chosen_idx": chosen_idx,
+        "picmap_values": [p.get("value") for p in picmap],
+        "crops_salvati": crops_saved,
+        "immagine_intera": "full.jpg"
+    }
+    
+    metadata_path = os.path.join(folder, "metadata.json")
+    with open(metadata_path, "w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2, ensure_ascii=False)
+    
+    log(f"📁 Errore salvato in {folder}")
+
 # ================ MAIN LOOP =====================
 def main():
     log("=" * 50)
-    log("🚀 Avvio DivellaEasy - Versione Hugging Face")
+    log("🚀 Avvio DivellaEasy - Versione FAISS (basso consumo memoria)")
     if not load_dataset_hf():
         log("❌ Impossibile proseguire senza dataset")
         return
@@ -188,7 +257,7 @@ def main():
                     seen[label] = i
             if chosen_idx is None:
                 log("❌ Nessun duplicato trovato")
-                cv2.imwrite(f"errore_{qpic}.jpg", img)
+                salva_errore(qpic, img, picmap, labels, None, "nessun_duplicato", urlid)
                 break
             time.sleep(seconds)
             word = picmap[chosen_idx]["value"]
@@ -199,17 +268,18 @@ def main():
             )
             if resp.json().get("warning") == "wrong_choice":
                 log("❌ Wrong choice")
-                cv2.imwrite(f"errore_{qpic}.jpg", img)
+                salva_errore(qpic, img, picmap, labels, chosen_idx, "wrong_choice", urlid)
                 break
             log(f"✅ OK - indice {chosen_idx}")
             time.sleep(2)
         except Exception as e:
-            log(f"❌ Errore: {e}")
+            log(f"❌ Errore generico: {e}")
             break
 
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
