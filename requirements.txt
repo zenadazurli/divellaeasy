@@ -3,4 +3,6 @@ numpy
 requests
 datasets
 huggingface-hub
+faiss-cpu
+
 
