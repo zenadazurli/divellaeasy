@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione FINALE con FAISS (basso consumo memoria)
+# divellaeasy_minimal.py - Versione FINALE con FAISS (m=3, divisibile per 33)
 
 import os
 import time
@@ -60,7 +60,7 @@ def load_dataset_hf():
         
         # Crea indice con Product Quantization (bassissimo consumo memoria)
         nlist = 100          # numero di cluster (centroidi)
-        m = 8                # numero di sottovettori per PQ (più piccolo = meno memoria)
+        m = 3                # numero di sottovettori per PQ (33 è divisibile per 3 = 11 dimensioni per sottovettore)
         d = vector_dim       # dimensione vettori (33)
         
         # Quantizzatore (per la ricerca esatta sui centroidi)
@@ -148,15 +148,7 @@ def predict(img_crop):
     distances, indices = faiss_index.search(features, k)
     best_idx = indices[0][0]
     
-    # Recupera l'etichetta reale (non l'indice del cluster)
-    # Nota: l'indice restituito da FAISS è l'indice del vettore originale
-    # Quindi possiamo usare dataset['y'][best_idx] per l'etichetta
-    # MA ATTENZIONE: FAISS restituisce l'indice nel database, che corrisponde
-    # alla posizione originale nel dataset. Possiamo usare direttamente quello.
-    
-    # Opzione 1: se abbiamo mantenuto l'ordine originale (X_all è stato aggiunto in ordine)
-    # l'indice corrisponde direttamente alla posizione nel dataset
-    # Quindi:
+    # Recupera l'etichetta reale
     true_label_idx = dataset['y'][best_idx]
     return classes_fast.get(int(true_label_idx), "errore")
 
@@ -279,6 +271,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
