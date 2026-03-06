@@ -17,8 +17,8 @@ REQUEST_TIMEOUT = 15
 ERRORI_DIR = "errori"  # cartella dove salvare gli errori
 
 # ================ DATI ACCOUNT =====================
-UID = "2288903"
-COOKIE_SESIDS = "qZSoh3cHab"  # <-- SOSTITUISCI QUANDO SCADE
+UID = "2288927"
+COOKIE_SESIDS = "TkYa8vl010"  # <-- SOSTITUISCI QUANDO SCADE
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -271,6 +271,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato")
+
 
 
 
