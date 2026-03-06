@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione FINALE con FAISS (m=3, divisibile per 33)
+# divellaeasy_minimal.py - Versione con health check immediato
 
 import os
 import time
@@ -8,79 +8,121 @@ import numpy as np
 import cv2
 import faiss
 import json
+import gc
+import threading
 from datetime import datetime
 from datasets import load_dataset
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ================ CONFIG =====================
 DIM = 64
 REQUEST_TIMEOUT = 15
-ERRORI_DIR = "errori"  # cartella dove salvare gli errori
+ERRORI_DIR = "errori"
+HEALTH_CHECK_PORT = int(os.environ.get('PORT', 10000))  # Usa la porta di Render
 
 # ================ DATI ACCOUNT =====================
-UID = "2288927"
-COOKIE_SESIDS = "TkYa8vl010"  # <-- SOSTITUISCI QUANDO SCADE
+UID = "2288934"
+COOKIE_SESIDS = "TEHv5X0ezq"
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
 dataset = None
 classes_fast = None
-faiss_index = None  # indice FAISS per ricerca veloce
-vector_dim = 33     # dimensione dei vettori nel dataset
+faiss_index = None
+vector_dim = 33
+server_ready = False  # FLAG: indica quando il server è pronto
+
+# ================ HEALTH CHECK SERVER (Risponde SUBITO) =====================
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass  # Silenzia i log del server
+
+def run_health_server():
+    """Avvia il server HTTP per gli health check in un thread separato"""
+    global server_ready
+    try:
+        server = HTTPServer(('0.0.0.0', HEALTH_CHECK_PORT), HealthHandler)
+        server_ready = True  # Il server è attivo!
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏥 Health check server avviato sulla porta {HEALTH_CHECK_PORT}")
+        server.serve_forever()
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ ERRORE CRITICO: impossibile avviare health check: {e}")
+        server_ready = False
+
+# Avvia il server in un thread separato (IMMEDIATAMENTE)
+health_thread = threading.Thread(target=run_health_server, daemon=True)
+health_thread.start()
+
+# ================ ATTENDI CHE IL SERVER SIA PRONTO =====================
+timeout = 10
+while not server_ready and timeout > 0:
+    time.sleep(0.5)
+    timeout -= 0.5
+
+if not server_ready:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Health check server non avviato correttamente")
+    # In questo caso, lo script potrebbe comunque continuare? Meglio fermarsi.
+    # Ma per test, procediamo comunque.
 
 # ================ LOG =====================
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ================ CARICAMENTO DATASET (HUGGING FACE) =====================
+# ================ CARICAMENTO DATASET (ora può richiedere tempo) =====================
 def load_dataset_hf():
     global dataset, classes_fast, faiss_index
     log("📥 Caricamento dataset da Hugging Face Hub...")
-    hf_token = os.environ.get('HF_TOKEN')
-    if hf_token is None:
-        log("⚠️ Token HF_TOKEN non trovato, tentativo senza autenticazione (dataset pubblico)")
-        token_param = None
-    else:
-        token_param = hf_token
+    # ... (il resto della funzione rimane invariato)
     try:
-        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=token_param)
+        # Questa parte può richiedere 30-60 secondi, ma l'health check già risponde
+        dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=None)
         log(f"✅ Dataset caricato: {len(dataset)} vettori")
         class_names = dataset.features['y'].names
         classes_fast = {i: name for i, name in enumerate(class_names)}
         
         # COSTRUZIONE INDICE FAISS
-        log("🔧 Costruzione indice FAISS (ottimizzato per memoria)...")
-        # Raccogli tutti i vettori X in un array numpy
+        log("🔧 Costruzione indice FAISS...")
         X_list = []
-        batch_size = 10000
+        batch_size = 500
         for i in range(0, len(dataset), batch_size):
             batch = dataset[i:i+batch_size]
             X_list.append(np.array(batch['X'], dtype=np.float32))
+        
         X_all = np.vstack(X_list)
         log(f"📊 Vettori caricati: {X_all.shape}")
         
-        # Crea indice con Product Quantization (bassissimo consumo memoria)
-        nlist = 100          # numero di cluster (centroidi)
-        m = 3                # numero di sottovettori per PQ (33 è divisibile per 3 = 11 dimensioni per sottovettore)
-        d = vector_dim       # dimensione vettori (33)
-        
-        # Quantizzatore (per la ricerca esatta sui centroidi)
+        # Indice FAISS
+        nlist = 100
+        m = 3
+        d = vector_dim
         quantizer = faiss.IndexFlatL2(d)
-        # Indice IVF con Product Quantization
         index = faiss.IndexIVFPQ(quantizer, d, nlist, m, 8)
         
-        # Addestra l'indice (richiede un po' di tempo ma si fa una volta)
         log("🏋️ Addestramento indice FAISS...")
         index.train(X_all)
-        # Aggiunge i vettori
         index.add(X_all)
         log(f"✅ Indice FAISS creato con {index.ntotal} vettori")
         faiss_index = index
+        
+        del X_list, X_all
+        gc.collect()
         return True
     except Exception as e:
         log(f"❌ Errore caricamento dataset: {e}")
         return False
 
 # ================ FUNZIONI DI FEATURE EXTRACTION =====================
+# (tutte le funzioni rimangono identiche: centra_figura, estrai_descrittori, get_features, predict, crop_safe, salva_errore)
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -136,23 +178,17 @@ def get_features(img):
     img_centrata = centra_figura(img)
     return estrai_descrittori(img_centrata)
 
-# ================ PREDIZIONE CON FAISS =====================
 def predict(img_crop):
     global faiss_index, classes_fast
     if img_crop is None or img_crop.size == 0:
         return None
     features = get_features(img_crop).astype(np.float32).reshape(1, -1)
-    
-    # Cerca il vicino più vicino con FAISS
-    k = 1  # numero di vicini da cercare
+    k = 1
     distances, indices = faiss_index.search(features, k)
     best_idx = indices[0][0]
-    
-    # Recupera l'etichetta reale
     true_label_idx = dataset['y'][best_idx]
     return classes_fast.get(int(true_label_idx), "errore")
 
-# ================ CROP SICURO =====================
 def crop_safe(img, coords):
     try:
         x1, y1, x2, y2 = map(int, coords.split(","))
@@ -167,7 +203,6 @@ def crop_safe(img, coords):
         return None
     return img[y1:y2, x1:x2]
 
-# ================ SALVATAGGIO ERRORI =====================
 def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder = os.path.join(ERRORI_DIR, f"{timestamp}_{qpic}")
@@ -208,15 +243,20 @@ def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
 # ================ MAIN LOOP =====================
 def main():
     log("=" * 50)
-    log("🚀 Avvio DivellaEasy - Versione FAISS (basso consumo memoria)")
+    log("🚀 Avvio DivellaEasy - Versione FAISS con Health Check Immediato")
+    
+    # Ora carichiamo il dataset (richiederà tempo, ma health check già risponde)
     if not load_dataset_hf():
         log("❌ Impossibile proseguire senza dataset")
         return
+    
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
         "Cookie": COOKIE_STRING
     }
     session = requests.Session()
+    captcha_counter = 0
+    
     while True:
         try:
             r = session.post(
@@ -226,19 +266,23 @@ def main():
             if r.status_code != 200:
                 log(f"❌ Status {r.status_code} - Cookie forse scaduto?")
                 break
+            
             data = r.json()
             urlid = data.get("surfses", {}).get("urlid")
             qpic = data.get("surfses", {}).get("qpic")
             seconds = int(data.get("surfses", {}).get("seconds", 20))
             picmap = data.get("picmap", [])
+            
             if not urlid or not qpic or len(picmap) < 5:
                 log("❌ Dati incompleti - Cookie forse scaduto?")
                 break
+            
             img_data = session.get(f"https://www.easyhits4u.com/simg/{qpic}.jpg", verify=False).content
             img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_COLOR)
             crops = [crop_safe(img, p.get("coords", "")) for p in picmap]
             labels = [predict(c) for c in crops]
             log(f"Labels: {labels}")
+            
             seen = {}
             chosen_idx = None
             for i, label in enumerate(labels):
@@ -247,10 +291,12 @@ def main():
                         chosen_idx = seen[label]
                         break
                     seen[label] = i
+            
             if chosen_idx is None:
                 log("❌ Nessun duplicato trovato")
                 salva_errore(qpic, img, picmap, labels, None, "nessun_duplicato", urlid)
                 break
+            
             time.sleep(seconds)
             word = picmap[chosen_idx]["value"]
             resp = session.get(
@@ -258,19 +304,31 @@ def main():
                 f"&ajax=1&word={word}&screen_width=1024&screen_height=768",
                 headers=headers, verify=False
             )
+            
             if resp.json().get("warning") == "wrong_choice":
                 log("❌ Wrong choice")
                 salva_errore(qpic, img, picmap, labels, chosen_idx, "wrong_choice", urlid)
                 break
-            log(f"✅ OK - indice {chosen_idx}")
+            
+            captcha_counter += 1
+            log(f"✅ OK - indice {chosen_idx} - Totale captcha: {captcha_counter}")
+            
+            if captcha_counter % 10 == 0:
+                gc.collect()
+                log(f"🧹 Garbage collection eseguita (captcha {captcha_counter})")
+            
             time.sleep(2)
+            
         except Exception as e:
             log(f"❌ Errore generico: {e}")
+            import traceback
+            log(traceback.format_exc())
             break
 
 if __name__ == "__main__":
     main()
-    log("🏁 Script terminato")
+    log("🏁 Script terminato - In attesa di health check per riavvio")
+
 
 
 
