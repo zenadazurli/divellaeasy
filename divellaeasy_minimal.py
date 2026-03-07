@@ -22,7 +22,7 @@ HEALTH_CHECK_PORT = int(os.environ.get('PORT', 10000))  # Usa la porta di Render
 
 # ================ DATI ACCOUNT =====================
 UID = "2288934"
-COOKIE_SESIDS = "TEHv5X0ezq"
+COOKIE_SESIDS = "Besr9LmUAc"
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -328,6 +328,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato - In attesa di health check per riavvio")
+
 
 
 
