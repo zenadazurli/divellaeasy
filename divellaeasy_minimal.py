@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# divellaeasy_minimal.py - Versione con health check immediato
+# divellaeasy_minimal.py - Versione FINALE con health check immediato e gestione picmap=None
 
 import os
 import time
@@ -18,11 +18,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 DIM = 64
 REQUEST_TIMEOUT = 15
 ERRORI_DIR = "errori"
-HEALTH_CHECK_PORT = int(os.environ.get('PORT', 10000))  # Usa la porta di Render
+HEALTH_CHECK_PORT = int(os.environ.get('PORT', 10000))
 
 # ================ DATI ACCOUNT =====================
 UID = "2288934"
-COOKIE_SESIDS = "Besr9LmUAc"
+COOKIE_SESIDS = "Besr9LmUAc"  # <-- SOSTITUISCI QUANDO SCADE
 COOKIE_STRING = f"sesids={COOKIE_SESIDS}; user_id={UID}"
 
 # ================ GLOBALS =====================
@@ -52,11 +52,11 @@ def run_health_server():
     global server_ready
     try:
         server = HTTPServer(('0.0.0.0', HEALTH_CHECK_PORT), HealthHandler)
-        server_ready = True  # Il server è attivo!
+        server_ready = True
         print(f"[{datetime.now().strftime('%H:%M:%S')}] 🏥 Health check server avviato sulla porta {HEALTH_CHECK_PORT}")
         server.serve_forever()
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ ERRORE CRITICO: impossibile avviare health check: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ ERRORE: impossibile avviare health check: {e}")
         server_ready = False
 
 # Avvia il server in un thread separato (IMMEDIATAMENTE)
@@ -69,22 +69,15 @@ while not server_ready and timeout > 0:
     time.sleep(0.5)
     timeout -= 0.5
 
-if not server_ready:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ❌ Health check server non avviato correttamente")
-    # In questo caso, lo script potrebbe comunque continuare? Meglio fermarsi.
-    # Ma per test, procediamo comunque.
-
 # ================ LOG =====================
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ================ CARICAMENTO DATASET (ora può richiedere tempo) =====================
+# ================ CARICAMENTO DATASET (HUGGING FACE) =====================
 def load_dataset_hf():
     global dataset, classes_fast, faiss_index
     log("📥 Caricamento dataset da Hugging Face Hub...")
-    # ... (il resto della funzione rimane invariato)
     try:
-        # Questa parte può richiedere 30-60 secondi, ma l'health check già risponde
         dataset = load_dataset("zenadazurli/easyhits4u-dataset", split="train", token=None)
         log(f"✅ Dataset caricato: {len(dataset)} vettori")
         class_names = dataset.features['y'].names
@@ -101,10 +94,11 @@ def load_dataset_hf():
         X_all = np.vstack(X_list)
         log(f"📊 Vettori caricati: {X_all.shape}")
         
-        # Indice FAISS
+        # Indice FAISS con Product Quantization
         nlist = 100
-        m = 3
+        m = 3                # 33/3 = 11 dimensioni per sottovettore
         d = vector_dim
+        
         quantizer = faiss.IndexFlatL2(d)
         index = faiss.IndexIVFPQ(quantizer, d, nlist, m, 8)
         
@@ -122,7 +116,6 @@ def load_dataset_hf():
         return False
 
 # ================ FUNZIONI DI FEATURE EXTRACTION =====================
-# (tutte le funzioni rimangono identiche: centra_figura, estrai_descrittori, get_features, predict, crop_safe, salva_errore)
 def centra_figura(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
@@ -178,6 +171,7 @@ def get_features(img):
     img_centrata = centra_figura(img)
     return estrai_descrittori(img_centrata)
 
+# ================ PREDIZIONE CON FAISS =====================
 def predict(img_crop):
     global faiss_index, classes_fast
     if img_crop is None or img_crop.size == 0:
@@ -189,6 +183,7 @@ def predict(img_crop):
     true_label_idx = dataset['y'][best_idx]
     return classes_fast.get(int(true_label_idx), "errore")
 
+# ================ CROP SICURO =====================
 def crop_safe(img, coords):
     try:
         x1, y1, x2, y2 = map(int, coords.split(","))
@@ -203,6 +198,7 @@ def crop_safe(img, coords):
         return None
     return img[y1:y2, x1:x2]
 
+# ================ SALVATAGGIO ERRORI =====================
 def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     folder = os.path.join(ERRORI_DIR, f"{timestamp}_{qpic}")
@@ -229,7 +225,7 @@ def salva_errore(qpic, img, picmap, labels, chosen_idx, motivo, urlid=None):
         "motivo": motivo,
         "labels_predette": labels,
         "chosen_idx": chosen_idx,
-        "picmap_values": [p.get("value") for p in picmap],
+        "picmap_values": [p.get("value") for p in picmap] if picmap else [],
         "crops_salvati": crops_saved,
         "immagine_intera": "full.jpg"
     }
@@ -245,7 +241,6 @@ def main():
     log("=" * 50)
     log("🚀 Avvio DivellaEasy - Versione FAISS con Health Check Immediato")
     
-    # Ora carichiamo il dataset (richiederà tempo, ma health check già risponde)
     if not load_dataset_hf():
         log("❌ Impossibile proseguire senza dataset")
         return
@@ -273,8 +268,11 @@ def main():
             seconds = int(data.get("surfses", {}).get("seconds", 20))
             picmap = data.get("picmap", [])
             
-            if not urlid or not qpic or len(picmap) < 5:
-                log("❌ Dati incompleti - Cookie forse scaduto?")
+            # GESTIONE MIGLIORATA: picmap potrebbe essere None
+            if not urlid or not qpic or not picmap or len(picmap) < 5:
+                log(f"❌ Dati incompleti - picmap={picmap} (tipo: {type(picmap).__name__})")
+                log("   Cookie forse scaduto o risposta server vuota")
+                # Non salviamo errore perché non abbiamo dati sufficienti
                 break
             
             img_data = session.get(f"https://www.easyhits4u.com/simg/{qpic}.jpg", verify=False).content
@@ -328,6 +326,7 @@ def main():
 if __name__ == "__main__":
     main()
     log("🏁 Script terminato - In attesa di health check per riavvio")
+
 
 
 
