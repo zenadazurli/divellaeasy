@@ -4,5 +4,7 @@ requests
 datasets
 huggingface-hub
 faiss-cpu
+playwright
+
 
 
